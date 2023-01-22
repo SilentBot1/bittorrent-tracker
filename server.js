@@ -445,8 +445,7 @@ class Server extends EventEmitter {
   onWebSocketConnection (socket, opts = {}) {
     opts.trustProxy = opts.trustProxy || this._trustProxy
 
-    socket.peerId = null // as hex
-    socket.infoHashes = [] // swarms that this socket is participating in
+    socket.infohashPeerIdMap = new Map()
     socket.onSend = err => {
       this._onWebSocketSend(socket, err)
     }
@@ -481,7 +480,9 @@ class Server extends EventEmitter {
       return
     }
 
-    if (!socket.peerId) socket.peerId = params.peer_id // as hex
+    if (!socket.infohashPeerIdMap.has(params.info_hash)) {
+      socket.infohashPeerIdMap.set(params.info_hash, params.peer_id) // as hex
+    }
 
     this._onRequest(params, (err, response) => {
       if (this.destroyed || socket.destroyed) return
@@ -502,10 +503,6 @@ class Server extends EventEmitter {
       if (response.action === 'announce') {
         peers = response.peers
         delete response.peers
-
-        if (!socket.infoHashes.includes(params.info_hash)) {
-          socket.infoHashes.push(params.info_hash)
-        }
 
         response.info_hash = common.hexToBinary(params.info_hash)
 
@@ -578,18 +575,18 @@ class Server extends EventEmitter {
   }
 
   _onWebSocketClose (socket) {
-    debug('websocket close %s', socket.peerId)
+    debug('websocket close %s', [...socket.infohashPeerIdMap.values()].join(', '))
     socket.destroyed = true
 
-    if (socket.peerId) {
-      socket.infoHashes.slice(0).forEach(infoHash => {
+    if (socket.infohashPeerIdMap.size) {
+      socket.infohashPeerIdMap.forEach((peerId, infoHash) => {
         const swarm = this.torrents[infoHash]
         if (swarm) {
           swarm.announce({
             type: 'ws',
             event: 'stopped',
             numwant: 0,
-            peer_id: socket.peerId
+            peer_id: peerId
           })
         }
       })
@@ -599,8 +596,7 @@ class Server extends EventEmitter {
     socket.onSend = noop
     socket.on('error', noop)
 
-    socket.peerId = null
-    socket.infoHashes = null
+    socket.infohashPeerIdMap = null
 
     if (typeof socket.onMessageBound === 'function') {
       socket.removeListener('message', socket.onMessageBound)
